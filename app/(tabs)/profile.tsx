@@ -1,11 +1,13 @@
 import React, { useState } from 'react';
-import { View, Text, StyleSheet, Pressable, Alert, TextInput, Image, ScrollView } from 'react-native';
+import { View, Text, StyleSheet, Pressable, Alert, TextInput, Image, ScrollView, ActivityIndicator } from 'react-native';
 import { Stack, useRouter } from 'expo-router';
 import { UserCircle2, Shield, Truck, Settings, LogOut, Edit2, Save, X, Camera } from 'lucide-react-native'; 
 import * as ImagePicker from 'expo-image-picker';
 import { useAuth } from '../../context/AuthContext';
 import { useUser } from '../../context/UserContext';
 import { supabase } from '../../context/supabase_client';
+// Importante para la decodificación de Base64
+import { decode } from 'base64-arraybuffer';
 
 const PRIMARY_COLOR = '#1C3F60';
 const ACCENT_COLOR = '#3B82F6';
@@ -23,6 +25,9 @@ export default function ProfileScreen() {
     const [editedPhone, setEditedPhone] = useState(user?.phone || '');
     const [editedBio, setEditedBio] = useState(user?.bio || '');
     const [profileImage, setProfileImage] = useState(user?.profileImage || null);
+    
+    // Nuevo estado para guardar los datos binarios de la imagen
+    const [imageBase64, setImageBase64] = useState<string | null>(null);
     
     const userName = user?.name || 'Usuario';
     const userType = user?.type || 'pasajero';
@@ -49,24 +54,23 @@ export default function ProfileScreen() {
 
     const pickImage = async () => {
         try {
-            // Solicitar permisos
             const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
-            
             if (status !== 'granted') {
                 Alert.alert('Permiso Denegado', 'Necesitamos acceso a tus fotos para cambiar tu imagen de perfil.');
                 return;
             }
 
-            // Abrir galería
             const result = await ImagePicker.launchImageLibraryAsync({
                 mediaTypes: ImagePicker.MediaTypeOptions.Images,
                 allowsEditing: true,
                 aspect: [1, 1],
                 quality: 0.7,
+                base64: true, // <-- ¡Importante! Pedimos el Base64
             });
 
             if (!result.canceled && result.assets[0]) {
-                setProfileImage(result.assets[0].uri);
+                setProfileImage(result.assets[0].uri); // Para la vista previa local
+                setImageBase64(result.assets[0].base64); // Para la subida
             }
         } catch (error) {
             Alert.alert('Error', 'No se pudo cargar la imagen');
@@ -80,35 +84,62 @@ export default function ProfileScreen() {
         }
 
         setIsSaving(true);
-        
+        let publicImageUrl = profileImage; // Asumimos la imagen existente primero
+
         try {
-            // Actualizar en Supabase
-            const { error } = await supabase
+            // --- PASO 1: Subir la imagen (si se cambió) ---
+            if (imageBase64) {
+                const fileName = `profile_${user?.uid}_${Date.now()}.jpg`;
+                const filePath = `${user?.uid}/${fileName}`;
+                
+                const arrayBuffer = decode(imageBase64);
+                const contentType = 'image/jpeg';
+
+                const { data: uploadData, error: uploadError } = await supabase.storage
+                    .from('avatars') // Asegúrate que tu Bucket se llame 'avatars'
+                    .upload(filePath, arrayBuffer, {
+                        contentType: contentType,
+                        upsert: true,
+                    });
+
+                if (uploadError) throw uploadError;
+
+                // --- PASO 2: Obtener la URL pública ---
+                const { data: urlData } = supabase.storage
+                    .from('avatars')
+                    .getPublicUrl(filePath);
+                
+                publicImageUrl = urlData.publicUrl;
+            }
+
+            // --- PASO 3: Actualizar la tabla 'perfiles' ---
+            const { error: profileError } = await supabase
                 .from('perfiles')
                 .update({
-                    nombre_usuario: editedName,
-                    telefono: editedPhone,
-                    biografia: editedBio,
-                    // foto_perfil: profileImage (implementar upload después)
+                    nombre_usuario: editedName.trim(),
+                    telefono: editedPhone.trim(),
+                    biografia: editedBio.trim(),
+                    foto_perfil: publicImageUrl, // Guardamos la URL pública
                 })
                 .eq('id', user?.uid);
 
-            if (error) {
-                throw error;
-            }
+            if (profileError) throw profileError;
 
-            // Actualizar contexto local
+            // --- PASO 4: Actualizar el contexto local ---
             setUser({
                 ...user,
                 name: editedName,
                 phone: editedPhone,
                 bio: editedBio,
-                profileImage: profileImage,
+                profileImage: publicImageUrl,
             });
 
             Alert.alert('Éxito', 'Perfil actualizado correctamente');
             setIsEditing(false);
+            setImageBase64(null); // Limpiamos el buffer de la imagen
+
         } catch (error: any) {
+            console.error('Error al guardar:', error);
             Alert.alert('Error', error.message || 'No se pudo actualizar el perfil');
         } finally {
             setIsSaving(false);
@@ -120,6 +151,7 @@ export default function ProfileScreen() {
         setEditedPhone(user?.phone || '');
         setEditedBio(user?.bio || '');
         setProfileImage(user?.profileImage || null);
+        setImageBase64(null); 
         setIsEditing(false);
     };
 
@@ -159,10 +191,9 @@ export default function ProfileScreen() {
                 return (
                     <View style={styles.card}>
                         <Text style={styles.roleTitle}>Acciones Rápidas</Text>
-                        <Pressable style={styles.button} onPress={() => router.push('/reservations')}>
-                            <Truck {...BaseIconProps} />
-                            <Text style={styles.buttonText}>Ver mis Reservas</Text>
-                        </Pressable>
+                        
+                        {/* --- BOTÓN "VER MIS RESERVAS" ELIMINADO --- */}
+
                         <Pressable style={styles.button} onPress={() => router.push('/settings')}>
                             <Settings {...BaseIconProps} />
                             <Text style={styles.buttonText}>Configuración de Cuenta</Text>
@@ -237,18 +268,22 @@ export default function ProfileScreen() {
 
                             <View style={styles.editButtonsContainer}>
                                 <Pressable 
-                                    style={[styles.editButton, styles.saveButton]} 
+                                    style={[styles.editButton, styles.saveButton, isSaving && styles.buttonDisabled]} 
                                     onPress={handleSaveProfile}
                                     disabled={isSaving}
                                 >
-                                    <Save size={18} color="white" />
+                                    {isSaving ? (
+                                        <ActivityIndicator size="small" color="white" />
+                                    ) : (
+                                        <Save size={18} color="white" />
+                                    )}
                                     <Text style={styles.editButtonText}>
                                         {isSaving ? 'Guardando...' : 'Guardar'}
                                     </Text>
                                 </Pressable>
 
                                 <Pressable 
-                                    style={[styles.editButton, styles.cancelButton]} 
+                                    style={[styles.editButton, styles.cancelButton, isSaving && styles.buttonDisabled]} 
                                     onPress={handleCancelEdit}
                                     disabled={isSaving}
                                 >
@@ -288,6 +323,7 @@ export default function ProfileScreen() {
     );
 }
 
+// ... (Estilos sin cambios, omitidos por brevedad)
 const styles = StyleSheet.create({
     scrollContainer: {
         flex: 1,
@@ -424,6 +460,9 @@ const styles = StyleSheet.create({
     },
     cancelButton: {
         backgroundColor: '#6B7280',
+    },
+    buttonDisabled: {
+        opacity: 0.7,
     },
     editButtonText: {
         color: 'white',

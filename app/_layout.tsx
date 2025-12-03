@@ -1,18 +1,19 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { StyleSheet, View, Text, TextInput, Pressable, Alert, ActivityIndicator } from 'react-native';
-import { Stack, Tabs } from 'expo-router'; 
-import { Eye, EyeOff, Home, BusFront, User } from 'lucide-react-native'; 
+import { Stack } from 'expo-router';
+import { Eye, EyeOff } from 'lucide-react-native';
 import { supabase, registrarPerfilUsuario } from '../context/supabase_client';
-import { AuthProvider } from '../context/AuthContext';
+import { AuthProvider, useAuth } from '../context/AuthContext';
 import { UserProvider, useUser } from '../context/UserContext';
+import 'react-native-url-polyfill/auto';
 
-const PRIMARY_COLOR = '#1C3F60'; 
+// --- Constantes y Tipos ---
+const PRIMARY_COLOR = '#1C3F60';
 const ACCENT_COLOR = '#3B82F6';
-
 type UserType = 'pasajero' | 'conductor' | 'administrador' | null;
 
-interface LoggedInUser { 
-    name: string; 
+interface ProfileUser {
+    name: string;
     type: UserType;
     uid: string;
     phone?: string;
@@ -20,52 +21,110 @@ interface LoggedInUser {
     profileImage?: string;
 }
 
-interface TabScreensProps {
-    loggedInUser: LoggedInUser;
-    onLogout: () => void;
+// --- Componente de Layout Principal ---
+export default function RootLayout() {
+    return (
+        <AuthProvider>
+            <UserProvider>
+                <LayoutController />
+            </UserProvider>
+        </AuthProvider>
+    );
 }
 
-const TabScreens = ({ loggedInUser, onLogout }: TabScreensProps) => {
-    return (
-        <Tabs screenOptions={{
-            headerShown: false, 
-            tabBarActiveTintColor: PRIMARY_COLOR,
-            tabBarLabelStyle: { fontWeight: '600' },
-            tabBarStyle: { height: 65, paddingVertical: 5 },
-        }}>
-            <Tabs.Screen
-                name="index"
-                options={{
-                    title: 'Publicaciones',
-                    tabBarIcon: ({ color }) => <Home color={color} size={24} />,
-                }}
-            />
-            <Tabs.Screen
-                name="explore"
-                options={{
-                    title: 'Rutas',
-                    tabBarIcon: ({ color }) => <BusFront color={color} size={24} />,
-                }}
-            />
-            <Tabs.Screen
-                name="profile"
-                options={{
-                    title: 'Perfil',
-                    tabBarIcon: ({ color }) => <User color={color} size={24} />,
-                }}
-            />
-            <Tabs.Screen name="modal" options={{ href: null }} /> 
-        </Tabs>
-    );
-};
+// --- Controlador de Navegación ---
+function LayoutController() {
+    const { user: authUser, isLoading: authLoading, logout } = useAuth();
+    const { user: profileUser, setUser: setProfileUser } = useUser();
 
-// Componente que maneja el login y usa useUser
+    useEffect(() => {
+        const fetchProfile = async (userId: string) => {
+            console.log("Auth cargada, buscando perfil para:", userId);
+            const { data: profileData, error: profileError } = await supabase
+                .from('perfiles')
+                .select('nombre_usuario, rol_id, telefono, biografia, foto_perfil')
+                .eq('id', userId)
+                .single();
+
+            if (profileError) {
+                Alert.alert('Error', 'No se pudo obtener el perfil. ' + profileError.message);
+                await logout();
+                return;
+            }
+
+            let userType: UserType = 'pasajero';
+            if (profileData?.rol_id === 2) userType = 'conductor';
+            else if (profileData?.rol_id === 3) userType = 'administrador';
+
+            const userData: ProfileUser = {
+                name: profileData?.nombre_usuario || 'Usuario',
+                type: userType,
+                uid: userId,
+                phone: profileData?.telefono || '',
+                bio: profileData?.biografia || '',
+                profileImage: profileData?.foto_perfil || null,
+            };
+            
+            setProfileUser(userData);
+            console.log("Perfil cargado en UserContext.");
+        };
+
+        if (authUser && !profileUser) {
+            fetchProfile(authUser.id);
+        } else if (!authUser && profileUser) {
+            setProfileUser(null);
+            console.log("Usuario deslogueado, limpiando UserContext.");
+        }
+    }, [authUser, profileUser, setProfileUser, logout]);
+
+    if (authLoading) {
+        return (
+            <View style={styles.container}>
+                <ActivityIndicator size="large" color={PRIMARY_COLOR} />
+                <Text style={styles.loadingText}>Verificando sesión...</Text>
+            </View>
+        );
+    }
+    
+    if (authUser && !profileUser) {
+        return (
+            <View style={styles.container}>
+                <ActivityIndicator size="large" color={PRIMARY_COLOR} />
+                <Text style={styles.loadingText}>Cargando perfil de usuario...</Text>
+            </View>
+        );
+    }
+
+    if (authUser && profileUser) {
+        // Usuario autenticado - Usar Stack en lugar de Tabs
+        return (
+            <Stack screenOptions={{ headerShown: false }}>
+                <Stack.Screen name="(tabs)/index" />
+                <Stack.Screen name="(tabs)/explore" />
+                <Stack.Screen name="(tabs)/profile" />
+                <Stack.Screen name="(tabs)/messages" />
+                <Stack.Screen name="(tabs)/modal" />
+                <Stack.Screen name="admin" />
+                <Stack.Screen name="crear-viaje" />
+                <Stack.Screen name="mis-viajes" />
+                <Stack.Screen name="map" />
+                <Stack.Screen name="reservations" />
+                <Stack.Screen name="settings" />
+                <Stack.Screen name="chat/[id]" />
+            </Stack>
+        );
+    }
+
+    return <LoginScreen />;
+}
+
+// --- Componente de Login ---
 function LoginScreen() {
     const [isLogin, setIsLogin] = useState(true);
     const [showPassword, setShowPassword] = useState(false);
     const [showConfirmPassword, setShowConfirmPassword] = useState(false);
     const [isLoading, setIsLoading] = useState(false);
-    
+
     const [formData, setFormData] = useState({
         usuario: '',
         contraseña: '',
@@ -73,14 +132,10 @@ function LoginScreen() {
         email: '',
     });
     
-    const [loggedInUser, setLoggedInUser] = useState<LoggedInUser | null>(null);
-    const { setUser } = useUser();
+    const { setUser: setProfileUser } = useUser();
 
     const handleChange = (name: string, value: string) => {
-        setFormData(prev => ({
-            ...prev,
-            [name]: value
-        }));
+        setFormData(prev => ({ ...prev, [name]: value }));
     };
 
     const handleIniciarSesion = async () => {
@@ -101,14 +156,12 @@ function LoginScreen() {
                 setIsLoading(false);
                 return;
             }
-
             if (!data.user?.id) {
                 Alert.alert('Error', 'No se pudo obtener el ID del usuario');
                 setIsLoading(false);
                 return;
             }
 
-            // ⭐ ACTUALIZADO: Cargar los nuevos campos del perfil
             const { data: profileData, error: profileError } = await supabase
                 .from('perfiles')
                 .select('nombre_usuario, rol_id, telefono, biografia, foto_perfil')
@@ -116,20 +169,16 @@ function LoginScreen() {
                 .single();
 
             if (profileError) {
-                Alert.alert('Error', 'No se pudo obtener el perfil del usuario: ' + profileError.message);
+                Alert.alert('Error', 'No se pudo obtener el perfil: ' + profileError.message);
                 setIsLoading(false);
                 return;
             }
 
             let userType: UserType = 'pasajero';
-            if (profileData?.rol_id === 2) {
-                userType = 'conductor';
-            } else if (profileData?.rol_id === 3) {
-                userType = 'administrador';
-            }
+            if (profileData?.rol_id === 2) userType = 'conductor';
+            else if (profileData?.rol_id === 3) userType = 'administrador';
 
-            // ⭐ ACTUALIZADO: Incluir los nuevos campos en userData
-            const userData = {
+            const userData: ProfileUser = {
                 name: profileData?.nombre_usuario || 'Usuario',
                 type: userType,
                 uid: data.user.id,
@@ -137,11 +186,9 @@ function LoginScreen() {
                 bio: profileData?.biografia || '',
                 profileImage: profileData?.foto_perfil || null,
             };
-
-            setLoggedInUser(userData);
-            setUser(userData);
-
-            setFormData({ usuario: '', contraseña: '', confirmarContraseña: '', email: '' });
+            
+            setProfileUser(userData);
+            
         } catch (error: any) {
             Alert.alert('Error', error.message || 'Ocurrió un error al iniciar sesión');
         } finally {
@@ -178,13 +225,12 @@ function LoginScreen() {
                 setIsLoading(false);
                 return;
             }
-
-            // Registrar perfil con nombre_usuario
+            
             const profileResult = await registrarPerfilUsuario(
                 data.user.id, 
-                formData.usuario,  // Esto es el nombre_usuario
+                formData.usuario,
                 'pasajero',
-                formData.usuario   // nombre_completo también usa el username
+                data.user.email
             );
 
             if (profileResult.error) {
@@ -202,18 +248,7 @@ function LoginScreen() {
             setIsLoading(false);
         }
     };
-
-    const handleCerrarSesion = async () => {
-        try {
-            await supabase.auth.signOut();
-            setLoggedInUser(null);
-            setUser(null);
-            setFormData({ usuario: '', contraseña: '', confirmarContraseña: '', email: '' });
-        } catch (error: any) {
-            Alert.alert('Error', 'No se pudo cerrar la sesión');
-        }
-    };
-
+    
     const handleRecuperarContraseña = async () => {
         if (!formData.usuario) {
             Alert.alert('Error', 'Ingresa tu email para recuperar la contraseña');
@@ -235,14 +270,6 @@ function LoginScreen() {
             setIsLoading(false);
         }
     };
-
-    if (loggedInUser) {
-        return (
-            <AuthProvider onLogout={handleCerrarSesion}>
-                <TabScreens loggedInUser={loggedInUser} onLogout={handleCerrarSesion} />
-            </AuthProvider>
-        );
-    }
 
     return (
         <View style={styles.container}>
@@ -415,15 +442,6 @@ function LoginScreen() {
     );
 }
 
-// Componente principal que envuelve todo con UserProvider
-export default function TabLayout() {
-    return (
-        <UserProvider>
-            <LoginScreen />
-        </UserProvider>
-    );
-}
-
 const styles = StyleSheet.create({
     container: {
         flex: 1,
@@ -431,6 +449,11 @@ const styles = StyleSheet.create({
         alignItems: 'center',
         justifyContent: 'center',
         padding: 16, 
+    },
+    loadingText: {
+        marginTop: 12,
+        color: PRIMARY_COLOR,
+        fontWeight: '600',
     },
     fullWidthCard: {
         width: '100%',
@@ -558,10 +581,5 @@ const styles = StyleSheet.create({
         alignItems: 'center',
         justifyContent: 'center',
         paddingVertical: 40,
-    },
-    loadingText: {
-        marginTop: 12,
-        color: PRIMARY_COLOR,
-        fontWeight: '600',
     },
 });

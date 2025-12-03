@@ -1,7 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { StyleSheet, View, Text, TextInput, Pressable, Alert, ScrollView, ActivityIndicator } from 'react-native';
 import { Stack, useRouter } from 'expo-router';
-import { Plus, User, Trash2, AlertTriangle } from 'lucide-react-native';
+// Importamos 'Bus' para el icono de la unidad
+import { Plus, User, Trash2, AlertTriangle, Truck, Bus } from 'lucide-react-native';
 import { supabase } from '../context/supabase_client';
 import { useUser } from '../context/UserContext';
 
@@ -77,7 +78,6 @@ export default function AdminPanel() {
             Alert.alert('Error', 'Por favor completa todos los campos');
             return;
         }
-
         if (formData.contraseña.length < 6) {
             Alert.alert('Error', 'La contraseña debe tener al menos 6 caracteres');
             return;
@@ -91,16 +91,10 @@ export default function AdminPanel() {
                 password: formData.contraseña,
             });
 
-            if (error) {
-                Alert.alert('Error', error.message);
-                setIsLoading(false);
-                return;
-            }
+            if (error) throw error;
 
             if (!data.user?.id) {
-                Alert.alert('Error', 'No se pudo crear el usuario');
-                setIsLoading(false);
-                return;
+                throw new Error('No se pudo crear el usuario');
             }
 
             // 2. Crear perfil con el rol seleccionado
@@ -108,16 +102,15 @@ export default function AdminPanel() {
                 .from('perfiles')
                 .insert([{
                     id: data.user.id,
+                    email: formData.email,
                     nombre_usuario: formData.nombre,
-                    nombre_completo: formData.nombre,
-                    rol_id: formData.rol === 'conductor' ? 2 : 3,
+                    rol: formData.rol,
                     estado: 'activo'
                 }]);
 
             if (profileError) {
-                Alert.alert('Error', 'Error al crear perfil: ' + profileError.message);
-                setIsLoading(false);
-                return;
+                await supabase.auth.admin.deleteUser(data.user.id);
+                throw profileError;
             }
 
             Alert.alert('Éxito', `${formData.rol.charAt(0).toUpperCase() + formData.rol.slice(1)} creado correctamente`);
@@ -141,17 +134,41 @@ export default function AdminPanel() {
 
             <ScrollView contentContainerStyle={styles.content}>
                 <View style={styles.header}>
-                    <Text style={styles.headerTitle}>Gestión de Usuarios</Text>
-                    <Text style={styles.headerSubtitle}>Crea conductores y administradores</Text>
+                    <Text style={styles.headerTitle}>Gestión General</Text>
+                    <Text style={styles.headerSubtitle}>Administra rutas, unidades y usuarios</Text>
                 </View>
+
+                {/* --- SECCIÓN DE GESTIÓN (BOTONES GRANDES) --- */}
+                <View style={styles.managementGrid}>
+                    <Pressable 
+                        style={styles.managementButton}
+                        onPress={() => router.push('/crear-viaje')} 
+                    >
+                        <Truck size={32} color="white" />
+                        <Text style={styles.managementButtonText}>Gestionar Rutas</Text>
+                    </Pressable>
+
+                    {/* CORRECCIÓN: La ruta debe coincidir con el nombre del archivo 'CrearUnidadScreen.tsx' */}
+                    <Pressable 
+                        style={[styles.managementButton, { backgroundColor: '#8B5CF6' }]}
+                        onPress={() => router.push('/CrearUnidadScreen')} 
+                    >
+                        <Bus size={32} color="white" />
+                        <Text style={styles.managementButtonText}>Registrar Unidad</Text>
+                    </Pressable>
+                </View>
+
+                <View style={styles.divider} />
+
+                <Text style={styles.sectionTitle}>Gestión de Usuarios</Text>
 
                 {!isCreatingUser ? (
                     <Pressable 
-                        style={styles.floatingButton}
+                        style={[styles.floatingButton, {backgroundColor: '#10B981'}]} 
                         onPress={() => setIsCreatingUser(true)}
                     >
                         <Plus size={28} color="white" />
-                        <Text style={styles.floatingButtonText}>Crear Usuario</Text>
+                        <Text style={styles.floatingButtonText}>Crear Nuevo Usuario</Text>
                     </Pressable>
                 ) : (
                     <View style={styles.formCard}>
@@ -263,7 +280,7 @@ export default function AdminPanel() {
                         • Se enviará un email de verificación{'\n'}
                         • Los conductores pueden publicar rutas{'\n'}
                         • Los administradores pueden gestionar usuarios{'\n'}
-                        • La contraseña debe tener mínimo 6 caracteres
+                        • Registra las unidades antes de asignarlas a rutas
                     </Text>
                 </View>
             </ScrollView>
@@ -281,7 +298,7 @@ const styles = StyleSheet.create({
         paddingBottom: 40,
     },
     header: {
-        marginBottom: 30,
+        marginBottom: 20,
     },
     headerTitle: {
         fontSize: 28,
@@ -293,6 +310,43 @@ const styles = StyleSheet.create({
         fontSize: 16,
         color: '#6B7280',
     },
+    divider: {
+        height: 1,
+        backgroundColor: '#E5E7EB',
+        marginVertical: 20,
+    },
+    sectionTitle: {
+        fontSize: 20,
+        fontWeight: 'bold',
+        color: PRIMARY_COLOR,
+        marginBottom: 15,
+    },
+    managementGrid: {
+        flexDirection: 'row',
+        gap: 15,
+        marginBottom: 10,
+    },
+    managementButton: {
+        flex: 1,
+        backgroundColor: ACCENT_COLOR,
+        paddingVertical: 20,
+        paddingHorizontal: 15,
+        borderRadius: 12,
+        alignItems: 'center',
+        justifyContent: 'center',
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 0.1,
+        shadowRadius: 4,
+        elevation: 3,
+        gap: 10,
+    },
+    managementButtonText: {
+        color: 'white',
+        fontSize: 14,
+        fontWeight: 'bold',
+        textAlign: 'center',
+    },
     floatingButton: {
         flexDirection: 'row',
         backgroundColor: ACCENT_COLOR,
@@ -301,7 +355,7 @@ const styles = StyleSheet.create({
         borderRadius: 12,
         alignItems: 'center',
         justifyContent: 'center',
-        marginBottom: 30,
+        marginBottom: 20,
         shadowColor: '#000',
         shadowOffset: { width: 0, height: 4 },
         shadowOpacity: 0.2,
@@ -421,7 +475,6 @@ const styles = StyleSheet.create({
         color: '#374151',
         lineHeight: 20,
     },
-    // Estilos para acceso denegado
     accessDeniedContainer: {
         flex: 1,
         justifyContent: 'center',

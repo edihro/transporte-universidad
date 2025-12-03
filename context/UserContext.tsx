@@ -2,14 +2,11 @@ import React, { createContext, useContext, useState } from 'react';
 
 type UserType = 'pasajero' | 'conductor' | 'administrador' | null;
 
-// Interfaz actualizada con los nuevos campos
 interface User {
     name: string;
     type: UserType;
-    uid: string;
-    phone?: string;        // ⭐ NUEVO: campo de teléfono
-    bio?: string;          // ⭐ NUEVO: biografía del usuario
-    profileImage?: string; // ⭐ NUEVO: URL de la foto de perfil
+    uid: string;         
+    profileImage?: string; 
 }
 
 interface UserContextType {
